@@ -1,0 +1,29 @@
+"""
+This code uses MNE to load the EEG data into a scrollable window.
+Of note, was the implementation of the line "block = True",
+which fixed an issue with the MNE window suddenly closing.
+"""
+
+from pathlib import Path
+import mne
+
+mne.viz.set_browser_backend("qt")
+
+project_folder = Path(__file__).resolve().parent.parent
+
+eeg_file = project_folder / "Data" / "sub-001" / "eeg" / "sub-001_task-motion_run-4_eeg.set"
+
+raw = mne.io.read_raw_eeglab(
+    eeg_file,
+    preload=True
+)
+
+print("Number of channels:", len(raw.ch_names))
+print("Sampling frequency:", raw.info["sfreq"])
+print("Recording duration:", raw.times[-1], "seconds")
+
+raw.plot(
+    duration=10,
+    n_channels=20,
+    block=True
+)
