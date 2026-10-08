@@ -1,0 +1,144 @@
+"""
+During the project this file was written following cross-subject analysis
+attempting to answer some methodological questions including:
+
+1. Sampling frequency per subject
+2. EEG reference 
+3. Imagery instruction 
+4. Why 3 subjects were excluded from the cross-subject analysis
+5. Source of electrode coordinates 
+
+However, if this project were to be reproduced or conducted again, this 
+audit could be done early on to remove limitations that may arise later.
+"""
+
+import json
+import re
+from pathlib import Path
+import mne
+import pandas as pd
+
+mne.set_log_level("WARNING")
+
+project_folder = Path(__file__).resolve().parent.parent
+data_folder = project_folder / "Data"
+
+IMAGERY_RUNS = [4, 8, 12]
+TMIN, TMAX = 0.5, 2.5                      # same window as the classification scripts
+SIDECAR_KEYS = ["SamplingFrequency", "EEGReference", "EEGChannelCount",
+                "EEGPlacementScheme", "EEGGround", "PowerLineFrequency",
+                "SoftwareFilters", "CapManufacturer", "TaskDescription",
+                "Instructions"]
+
+
+def first_match(pattern):
+    matches = list(data_folder.rglob(pattern))
+    return matches[0] if matches else None
+
+
+def find_subjects():
+    numbers = set()
+    for path in data_folder.rglob("sub-*_task-motion_run-4_eeg.set"):
+        match = re.match(r"sub-(\d+)_", path.name)
+        if match:
+            numbers.add(int(match.group(1)))
+    return sorted(numbers)
+
+rows = []
+ref_names, ref_sfreq = None, None
+sidecar_info = {}
+positions_in_set = None
+
+for sub in find_subjects():
+    runs_found, n_left, n_right = [], 0, 0
+    sfreqs, channel_lists = set(), []
+
+    for run in IMAGERY_RUNS:
+        stem = f"sub-{sub:03d}_task-motion_run-{run}"
+        eeg = first_match(f"{stem}_eeg.set")
+        events = first_match(f"{stem}_events.tsv")
+        if eeg is None or events is None:
+            continue
+
+        raw = mne.io.read_raw_eeglab(eeg, preload=False)    # header only
+        runs_found.append(run)
+        sfreqs.add(raw.info["sfreq"])
+        channel_lists.append(tuple(raw.ch_names))
+
+        if positions_in_set is None:
+            positions_in_set = raw.get_montage() is not None
+        if ref_names is None:
+            ref_names, ref_sfreq = tuple(raw.ch_names), raw.info["sfreq"]
+
+        values = pd.read_csv(events, sep="\t")["value"]
+        n_left += int((values == "TASK2T1").sum())
+        n_right += int((values == "TASK2T2").sum())
+
+        if not sidecar_info:                                 # read one sidecar
+            sidecar = first_match(f"{stem}_eeg.json") or first_match("task-motion_eeg.json")
+            if sidecar:
+                content = json.loads(sidecar.read_text())
+                sidecar_info = {"file": sidecar.name,
+                                **{k: content[k] for k in SIDECAR_KEYS if k in content}}
+
+    reasons = []
+    if len(runs_found) < 2:
+        reasons.append("fewer than 2 runs")
+    if any(cl != ref_names for cl in channel_lists):
+        reasons.append("channel list differs")
+    if any(s != ref_sfreq for s in sfreqs):
+        reasons.append("different sampling rate (so different epoch length)")
+
+    rows.append({
+        "subject": sub,
+        "runs_found": ",".join(map(str, runs_found)),
+        "n_runs": len(runs_found),
+        "sfreq": ",".join(str(s) for s in sorted(sfreqs)),
+        "n_left": n_left,
+        "n_right": n_right,
+        "would_be_skipped": "; ".join(reasons),
+    })
+
+table = pd.DataFrame(rows)
+table.to_csv(project_folder / "data_audit.csv", index=False)
+
+print(f"Subjects found: {len(table)}\n")
+
+print("=== Sampling frequency (Hz) across subjects ===")
+print(table["sfreq"].value_counts().to_string(), "\n")
+
+print("=== Number of imagery runs per subject ===")
+print(table["n_runs"].value_counts().sort_index().to_string(), "\n")
+
+skipped = table[table["would_be_skipped"] != ""]
+print(f"=== Subjects the cross-subject script would skip: {len(skipped)} ===")
+if len(skipped):
+    print(skipped[["subject", "runs_found", "sfreq", "would_be_skipped"]]
+          .to_string(index=False))
+print()
+
+print("=== BIDS sidecar (reference, placement, filters) ===")
+if sidecar_info:
+    for key, value in sidecar_info.items():
+        print(f"  {key}: {value}")
+else:
+    print("  No *_eeg.json sidecar found in the Data folder.")
+print()
+
+print("=== Electrode coordinates ===")
+electrodes = first_match("*electrodes.tsv")
+coordsystem = first_match("*coordsystem.json")
+print(f"  BIDS electrodes file:   {electrodes.name if electrodes else 'not found'}")
+print(f"  BIDS coordsystem file:  {coordsystem.name if coordsystem else 'not found'}")
+print(f"  Positions stored in the .set file: {positions_in_set}")
+if coordsystem:
+    print("  Coordinate system:", json.loads(coordsystem.read_text()))
+print()
+
+print("=== Documentation files to read for the task instruction ===")
+for name in ["README*", "dataset_description.json", "task-motion_events.json",
+             "task-motion_eeg.json"]:
+    found = first_match(name)
+    print(f"  {name}: {found.relative_to(data_folder) if found else 'not found'}")
+
+print("\nSaved data_audit.csv")
