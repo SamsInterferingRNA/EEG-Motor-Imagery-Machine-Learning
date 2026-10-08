@@ -1,0 +1,82 @@
+"""
+This was the last experiment with single runs, looking to categorise
+the data into epochs by task and time. 
+"""
+
+from pathlib import Path
+import mne
+import pandas as pd
+
+project_folder = Path(__file__).resolve().parent.parent
+
+eeg_file = project_folder / "Data" / "sub-001" / "eeg" / "sub-001_task-motion_run-4_eeg.set"
+events_file = project_folder / "Data" / "sub-001" / "eeg" / "sub-001_task-motion_run-4_events.tsv"
+
+raw = mne.io.read_raw_eeglab(eeg_file, preload=True)
+
+print("EEG loaded.")
+print("Channels:", len(raw.ch_names))
+print("Sampling frequency:", raw.info['sfreq'])
+
+events_table = pd.read_csv(events_file, sep="\t")
+
+event_names = {
+    "TASK2T0": "REST",
+    "TASK2T1": "LEFT",
+    "TASK2T2": "RIGHT"
+}
+
+
+events_table["condition"] = events_table["value"].map(event_names)
+
+print("\nEvent counts:")
+print(events_table["condition"].value_counts())
+
+
+events = events_table["sample"].to_numpy()
+
+event_ids = {
+    "REST": 1,
+    "LEFT": 2,
+    "RIGHT": 3
+}
+
+mne_events = []
+
+for _, row in events_table.iterrows():
+
+    sample = int(row["sample"])
+    condition = row["condition"]
+    event_id = event_ids[condition]
+
+    mne_events.append([
+        sample,
+        0,
+        event_id
+    ])
+
+epochs = mne.Epochs(
+    raw,
+    mne_events,
+    event_id=event_ids,
+    tmin=0,
+    tmax=3,
+    baseline=None,
+    preload=True,
+)
+
+
+print("\nEpoch information:")
+print(epochs)
+
+print("\nNumber of epochs:")
+print(len(epochs))
+
+print("\nEpochs by condition:")
+
+for condition in event_ids:
+    print(
+        condition,
+        len(epochs[condition])
+    )
+
