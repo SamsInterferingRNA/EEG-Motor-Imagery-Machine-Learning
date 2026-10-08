@@ -1,1 +1,29 @@
+"""
+Exploration of the events encoded in the EEG data, divided into the 
+tasks specified in the README of the data source.
+"""
 
+from pathlib import Path
+import pandas as pd
+
+project_folder = Path(__file__).resolve().parent.parent
+
+events_file = project_folder / "Data" / "sub-001" / "eeg" / "sub-001_task-motion_run-4_events.tsv"
+
+events = pd.read_csv(
+    events_file,
+    sep="\t"
+)
+
+event_names = {
+    "TASK2T0": "Rest",
+    "TASK2T1": "LEFT",
+    "TASK2T2": "RIGHT"
+}
+
+events["condition"] = events["value"].map(event_names)
+print("\nEVENTS:")
+print(events[["onset", "sample", "value", "condition"]].to_string(index=False))
+
+print("\nNUMBER OF EACH CONDITION:")
+print(events["condition"].value_counts())
